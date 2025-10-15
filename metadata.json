@@ -1,0 +1,5 @@
+{
+  "name": "Gestor de Torneos",
+  "description": "Una aplicación para gestionar un torneo con fase de grupos y eliminatorias para 18 equipos. Soporta diferentes deportes como futsal, baloncesto, balonmano y voleibol, con reglas específicas de puntuación y desempate.",
+  "requestFramePermissions": []
+}
