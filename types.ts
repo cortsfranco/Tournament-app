@@ -73,4 +73,6 @@ export type TournamentAction =
   | { type: 'SETUP_TOURNAMENT'; payload: { teams: string[]; sport: Sport } }
   | { type: 'UPDATE_MATCH_SCORE'; payload: { matchId: number; scores: Omit<Match, 'id' | 'team1Id' | 'team2Id' | 'played' | 'round'>; matchType: 'group' | 'playoff' } }
   | { type: 'GENERATE_PLAYOFFS' }
-  | { type: 'EDIT_TEAM_NAME'; payload: { teamId: number; newName: string } };
+  | { type: 'EDIT_TEAM_NAME'; payload: { teamId: number; newName: string } }
+  | { type: 'EDIT_TOURNAMENT_DETAILS'; payload: { name: string; sport: Sport } }
+  | { type: 'OVERRIDE_PLAYOFF_WINNER'; payload: { matchId: number; winnerId: number } };

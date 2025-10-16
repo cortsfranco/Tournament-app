@@ -1,4 +1,3 @@
-
 import { useReducer, useCallback, useEffect } from 'react';
 import { TournamentState, TournamentAction, Sport, Team, Group, Match, TournamentStatus, Playoff } from '../types';
 
@@ -32,11 +31,39 @@ const sortTeams = (teams: Team[], sport: Sport): Team[] => {
       if (a.goalDifference !== b.goalDifference) return b.goalDifference - a.goalDifference;
       if (a.goalsFor !== b.goalsFor) return b.goalsFor - a.goalsFor;
     }
-    // Menos tarjetas es mejor
-    if (a.greenCards !== b.greenCards) return a.greenCards - b.greenCards;
-    return 0; // Empate
+    // Fair play: más tarjetas verdes es mejor para el desempate.
+    if (a.greenCards !== b.greenCards) return b.greenCards - a.greenCards;
+    
+    // Fallback alfabético si todo es idéntico
+    return a.name.localeCompare(b.name);
   });
 };
+
+const updatePlayoffBracket = (playoff: Playoff, matchId: number, winnerId: number, loserId: number): Playoff => {
+    const allPlayoffMatches = [...playoff.quarterfinals, ...playoff.semifinals, ...playoff.thirdPlace, ...playoff.final];
+    const matchToUpdate = allPlayoffMatches.find(m => m.id === matchId);
+
+    if (matchToUpdate) {
+        if (matchToUpdate.round === 'QF') {
+            const qfIndex = playoff.quarterfinals.findIndex(m => m.id === matchId);
+            if(qfIndex === 0 || qfIndex === 1) playoff.semifinals[0][qfIndex === 0 ? 'team1Id' : 'team2Id'] = winnerId;
+            if(qfIndex === 2 || qfIndex === 3) playoff.semifinals[1][qfIndex === 2 ? 'team1Id' : 'team2Id'] = winnerId;
+        } else if (matchToUpdate.round === 'SF') {
+            const sfIndex = playoff.semifinals.findIndex(m => m.id === matchId);
+            if (sfIndex === 0) playoff.final[0].team1Id = winnerId;
+            else playoff.final[0].team2Id = winnerId;
+            
+            if (sfIndex === 0) playoff.thirdPlace[0].team1Id = loserId;
+            else playoff.thirdPlace[0].team2Id = loserId;
+        } else if (matchToUpdate.round === 'F') {
+            playoff.championId = winnerId;
+        } else if (matchToUpdate.round === '3P') {
+            playoff.thirdPlaceId = winnerId;
+        }
+    }
+    return playoff;
+};
+
 
 export const tournamentReducer = (state: TournamentState, action: TournamentAction): TournamentState => {
   switch (action.type) {
@@ -64,33 +91,11 @@ export const tournamentReducer = (state: TournamentState, action: TournamentActi
 
     case 'UPDATE_MATCH_SCORE': {
       const { matchId, scores, matchType } = action.payload;
-      
-      // --- Green Card Accumulation Logic ---
-      let originalMatch: Match | undefined;
-      if (matchType === 'group') {
-          for (const group of state.groups) {
-              originalMatch = group.matches.find(m => m.id === matchId);
-              if (originalMatch) break;
-          }
-      } else if (state.playoff) {
-          originalMatch = [...state.playoff.quarterfinals, ...state.playoff.semifinals, ...(state.playoff.thirdPlace || []), ...state.playoff.final].find(m => m.id === matchId);
-      }
-
-      let newTeams = state.teams;
-      if (originalMatch) {
-          const team1CardsDelta = scores.team1GreenCards - originalMatch.team1GreenCards;
-          const team2CardsDelta = scores.team2GreenCards - originalMatch.team2GreenCards;
-          newTeams = state.teams.map(t => {
-              if (t.id === originalMatch!.team1Id) return { ...t, greenCards: t.greenCards + team1CardsDelta };
-              if (t.id === originalMatch!.team2Id) return { ...t, greenCards: t.greenCards + team2CardsDelta };
-              return t;
-          });
-      }
-      // --- End Green Card Logic ---
-
       let newGroups = JSON.parse(JSON.stringify(state.groups));
       let newPlayoff = state.playoff ? JSON.parse(JSON.stringify(state.playoff)) : null;
-
+      
+      let allPlayoffMatches: Match[] = [];
+      
       if (matchType === 'group') {
         let groupToUpdate: Group | undefined;
         for (const group of newGroups) {
@@ -115,10 +120,7 @@ export const tournamentReducer = (state: TournamentState, action: TournamentActi
 
                 team1.played++;
                 team2.played++;
-                // Group-specific green cards for tie-breaking
-                team1.greenCards += match.team1GreenCards;
-                team2.greenCards += match.team2GreenCards;
-
+               
                 if (state.sport === Sport.VOLLEYBALL) {
                     team1.setsWon += match.team1Score;
                     team1.setsLost += match.team2Score;
@@ -161,34 +163,36 @@ export const tournamentReducer = (state: TournamentState, action: TournamentActi
             groupToUpdate.teams = sortTeams(groupToUpdate.teams, state.sport);
         }
       } else if (matchType === 'playoff' && newPlayoff) {
-          const allPlayoffMatches = [...newPlayoff.quarterfinals, ...newPlayoff.semifinals, ...newPlayoff.thirdPlace, ...newPlayoff.final];
+          allPlayoffMatches = [...newPlayoff.quarterfinals, ...newPlayoff.semifinals, ...newPlayoff.thirdPlace, ...newPlayoff.final];
           const matchToUpdate = allPlayoffMatches.find(m => m.id === matchId);
           if (matchToUpdate) {
               Object.assign(matchToUpdate, { ...scores, played: true });
-              
               const winnerId = matchToUpdate.team1Score > matchToUpdate.team2Score ? matchToUpdate.team1Id : matchToUpdate.team2Id;
               const loserId = matchToUpdate.team1Score > matchToUpdate.team2Score ? matchToUpdate.team2Id : matchToUpdate.team1Id;
-
-              if (matchToUpdate.round === 'QF') {
-                const qfIndex = newPlayoff.quarterfinals.findIndex(m => m.id === matchId);
-                if(qfIndex === 0 || qfIndex === 1) newPlayoff.semifinals[0][qfIndex === 0 ? 'team1Id' : 'team2Id'] = winnerId;
-                if(qfIndex === 2 || qfIndex === 3) newPlayoff.semifinals[1][qfIndex === 2 ? 'team1Id' : 'team2Id'] = winnerId;
-              } else if (matchToUpdate.round === 'SF') {
-                const sfIndex = newPlayoff.semifinals.findIndex(m => m.id === matchId);
-                if (sfIndex === 0) newPlayoff.final[0].team1Id = winnerId;
-                else newPlayoff.final[0].team2Id = winnerId;
-                
-                if (sfIndex === 0) newPlayoff.thirdPlace[0].team1Id = loserId;
-                else newPlayoff.thirdPlace[0].team2Id = loserId;
-
-              } else if (matchToUpdate.round === 'F') {
-                  newPlayoff.championId = winnerId;
-                  return { ...state, teams: newTeams, playoff: newPlayoff, status: TournamentStatus.FINISHED };
-              } else if (matchToUpdate.round === '3P') {
-                  newPlayoff.thirdPlaceId = winnerId;
+              newPlayoff = updatePlayoffBracket(newPlayoff, matchId, winnerId, loserId);
+              if (matchToUpdate.round === 'F') {
+                  return { ...state, groups: newGroups, playoff: newPlayoff, status: TournamentStatus.FINISHED };
               }
           }
       }
+      
+      const allGroupTeams = newGroups.flatMap(g => g.teams);
+      const allMatches = newGroups.flatMap(g => g.matches);
+
+      const newTeams = state.teams.map(team => {
+        const groupData = allGroupTeams.find(t => t.id === team.id);
+        const finalTeamData = groupData ? { ...groupData } : createTeam(team.id, team.name); // Combine group data
+        
+        finalTeamData.greenCards = 0; // Recalculate green cards from all matches
+        allMatches
+          .filter(m => m.played && (m.team1Id === team.id || m.team2Id === team.id))
+          .forEach(m => {
+            if (m.team1Id === team.id) finalTeamData.greenCards += m.team1GreenCards;
+            if (m.team2Id === team.id) finalTeamData.greenCards += m.team2GreenCards;
+          });
+        
+        return finalTeamData;
+      });
 
       return { ...state, teams: newTeams, groups: newGroups, playoff: newPlayoff };
     }
@@ -199,8 +203,8 @@ export const tournamentReducer = (state: TournamentState, action: TournamentActi
 
         state.groups.forEach(group => {
             const sortedGroupTeams = sortTeams(group.teams, state.sport);
-            if(sortedGroupTeams[0]) firstPlaceTeams.push(sortedGroupTeams[0]);
-            if(sortedGroupTeams[1]) secondPlaceTeams.push(sortedGroupTeams[1]);
+            if(sortedGroupTeams[0]) firstPlaceTeams.push(state.teams.find(t => t.id === sortedGroupTeams[0].id)!);
+            if(sortedGroupTeams[1]) secondPlaceTeams.push(state.teams.find(t => t.id === sortedGroupTeams[1].id)!);
         });
         
         const rankedFirsts = sortTeams(firstPlaceTeams, state.sport);
@@ -256,6 +260,34 @@ export const tournamentReducer = (state: TournamentState, action: TournamentActi
         teams: newTeams,
         groups: newGroups,
       };
+    }
+
+    case 'EDIT_TOURNAMENT_DETAILS': {
+        const { name, sport } = action.payload;
+        return { ...state, name, sport };
+    }
+    
+    case 'OVERRIDE_PLAYOFF_WINNER': {
+        const { matchId, winnerId } = action.payload;
+        if (!state.playoff) return state;
+
+        let newPlayoff = JSON.parse(JSON.stringify(state.playoff));
+        const allPlayoffMatches = [...newPlayoff.quarterfinals, ...newPlayoff.semifinals, ...newPlayoff.thirdPlace, ...newPlayoff.final];
+        const matchToUpdate = allPlayoffMatches.find(m => m.id === matchId);
+        
+        if (matchToUpdate) {
+            matchToUpdate.played = true;
+            const loserId = matchToUpdate.team1Id === winnerId ? matchToUpdate.team2Id : matchToUpdate.team1Id;
+            // Opcional: poner un score simbólico
+            matchToUpdate.team1Score = matchToUpdate.team1Id === winnerId ? 1 : 0;
+            matchToUpdate.team2Score = matchToUpdate.team2Id === winnerId ? 1 : 0;
+            
+            newPlayoff = updatePlayoffBracket(newPlayoff, matchId, winnerId, loserId);
+            if (matchToUpdate.round === 'F') {
+                return { ...state, playoff: newPlayoff, status: TournamentStatus.FINISHED };
+            }
+        }
+        return { ...state, playoff: newPlayoff };
     }
 
     default:

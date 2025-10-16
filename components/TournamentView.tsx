@@ -9,6 +9,7 @@ interface TournamentViewProps {
   onGeneratePlayoffs: () => void;
   dispatch: React.Dispatch<TournamentAction>;
   onBackToDashboard: () => void;
+  onEditTournament: () => void;
 }
 
 const sortTeams = (teams: Team[], sport: Sport): Team[] => {
@@ -22,8 +23,11 @@ const sortTeams = (teams: Team[], sport: Sport): Team[] => {
       if (a.goalDifference !== b.goalDifference) return b.goalDifference - a.goalDifference;
       if (a.goalsFor !== b.goalsFor) return b.goalsFor - a.goalsFor;
     }
-    if (a.greenCards !== b.greenCards) return a.greenCards - b.greenCards;
-    return 0;
+    // Fair play: más tarjetas verdes es mejor para el desempate.
+    if (a.greenCards !== b.greenCards) return b.greenCards - a.greenCards;
+    
+    // Fallback alfabético si todo es idéntico
+    return a.name.localeCompare(b.name);
   });
 };
 
@@ -43,10 +47,12 @@ const exportToCsv = (tournament: TournamentState) => {
         const headers = sport === Sport.GENERAL ? headersGeneral : headersVolleyball;
         csvContent += headers.slice(1).join(',') + "\n";
         
-        group.teams.forEach(team => {
+        const sortedTeams = sortTeams(group.teams, sport);
+        sortedTeams.forEach(team => {
+            const teamData = teams.find(t => t.id === team.id)!; // Get updated total green cards
             const rowData = sport === Sport.GENERAL
-                ? [`"${team.name}"`, team.points, team.played, team.wins, team.draws, team.losses, team.goalDifference, team.goalsFor, team.goalsAgainst, team.greenCards]
-                : [`"${team.name}"`, team.points, team.played, team.wins, team.losses, team.setDifference, team.pointsDifference, team.greenCards];
+                ? [`"${team.name}"`, team.points, team.played, team.wins, team.draws, team.losses, team.goalDifference, team.goalsFor, team.goalsAgainst, teamData.greenCards]
+                : [`"${team.name}"`, team.points, team.played, team.wins, team.losses, team.setDifference, team.pointsDifference, teamData.greenCards];
             csvContent += rowData.join(',') + "\n";
         });
         csvContent += "\n";
@@ -80,7 +86,7 @@ const exportToCsv = (tournament: TournamentState) => {
     document.body.removeChild(link);
 };
 
-const TeamRow: React.FC<{ team: Team; rank: number; sport: Sport; dispatch: React.Dispatch<TournamentAction>; }> = ({ team, rank, sport, dispatch }) => {
+const TeamRow: React.FC<{ team: Team; rank: number; sport: Sport; dispatch: React.Dispatch<TournamentAction>; totalGreenCards: number; }> = ({ team, rank, sport, dispatch, totalGreenCards }) => {
     const [isEditing, setIsEditing] = useState(false);
     const [name, setName] = useState(team.name);
     const inputRef = useRef<HTMLInputElement>(null);
@@ -154,15 +160,18 @@ const TeamRow: React.FC<{ team: Team; rank: number; sport: Sport; dispatch: Reac
                     <td className="p-3 text-center">{team.pointsDifference}</td>
                 </>
             )}
-            <td className="p-3 text-center text-green-400">{team.greenCards}</td>
+            <td className="p-3 text-center text-green-400">{totalGreenCards}</td>
         </tr>
     );
 };
 
-const GroupComponent: React.FC<{ group: Group; getTeamById: (id: number) => Team | undefined; onUpdateMatch: (match: Match) => void, sport: Sport; dispatch: React.Dispatch<TournamentAction>; }> = ({ group, getTeamById, onUpdateMatch, sport, dispatch }) => {
+const GroupComponent: React.FC<{ group: Group; getTeamById: (id: number) => Team | undefined; onUpdateMatch: (match: Match) => void, sport: Sport; dispatch: React.Dispatch<TournamentAction>; fullTeamsList: Team[] }> = ({ group, getTeamById, onUpdateMatch, sport, dispatch, fullTeamsList }) => {
     const tableHeadersGeneral = ['#', 'Equipo', 'Pts', 'PJ', 'G', 'E', 'P', 'DG', 'GF', 'GC', 'TV'];
     const tableHeadersVolleyball = ['#', 'Equipo', 'Pts', 'PJ', 'G', 'P', 'DS', 'DP', 'TV'];
     const headers = sport === Sport.GENERAL ? tableHeadersGeneral : tableHeadersVolleyball;
+    
+    const sortedTeams = sortTeams(group.teams, sport);
+
     return (
     <div className="bg-gray-800 border border-gray-700 rounded-lg p-4">
         <h3 className="text-xl font-bold mb-4 text-teal-400">{group.id}</h3>
@@ -174,7 +183,10 @@ const GroupComponent: React.FC<{ group: Group; getTeamById: (id: number) => Team
                     </tr>
                 </thead>
                 <tbody>
-                    {group.teams.map((team, index) => <TeamRow key={team.id} team={team} rank={index + 1} sport={sport} dispatch={dispatch} />)}
+                    {sortedTeams.map((team, index) => {
+                        const totalGreenCards = fullTeamsList.find(t => t.id === team.id)?.greenCards ?? 0;
+                        return <TeamRow key={team.id} team={team} rank={index + 1} sport={sport} dispatch={dispatch} totalGreenCards={totalGreenCards}/>
+                    })}
                 </tbody>
             </table>
         </div>
@@ -276,13 +288,23 @@ const PlayoffBracket: React.FC<{ playoff: TournamentState['playoff'], getTeamByI
 };
 
 
-const TournamentView: React.FC<TournamentViewProps> = ({ tournament, getTeamById, onUpdateMatch, onGeneratePlayoffs, dispatch, onBackToDashboard }) => {
+const TournamentView: React.FC<TournamentViewProps> = ({ tournament, getTeamById, onUpdateMatch, onGeneratePlayoffs, dispatch, onBackToDashboard, onEditTournament }) => {
   const [activeTab, setActiveTab] = useState('groups');
 
   const allGroupMatchesPlayed = tournament.groups.every(g => g.matches.every(m => m.played));
 
-  const sortedFirsts = sortTeams(tournament.groups.map(g => g.teams[0]).filter(Boolean), tournament.sport);
-  const sortedSeconds = sortTeams(tournament.groups.map(g => g.teams[1]).filter(Boolean), tournament.sport);
+  const firstPlaceTeams = tournament.groups.map(g => {
+      const sortedGroup = sortTeams(g.teams, tournament.sport);
+      return tournament.teams.find(t => t.id === sortedGroup[0]?.id);
+  }).filter((t): t is Team => !!t);
+
+  const secondPlaceTeams = tournament.groups.map(g => {
+      const sortedGroup = sortTeams(g.teams, tournament.sport);
+      return tournament.teams.find(t => t.id === sortedGroup[1]?.id);
+  }).filter((t): t is Team => !!t);
+
+  const sortedFirsts = sortTeams(firstPlaceTeams, tournament.sport);
+  const sortedSeconds = sortTeams(secondPlaceTeams, tournament.sport);
   
   const TabButton: React.FC<{tabName: string; label: string}> = ({ tabName, label }) => (
     <button onClick={() => setActiveTab(tabName)} className={`px-4 py-2 font-semibold rounded-md transition-colors ${activeTab === tabName ? 'bg-teal-500 text-white' : 'text-gray-300 hover:bg-gray-700'}`}>
@@ -293,7 +315,12 @@ const TournamentView: React.FC<TournamentViewProps> = ({ tournament, getTeamById
   return (
     <div className="p-4 md:p-8">
         <div className="flex flex-wrap justify-between items-center mb-8 gap-4">
-            <h1 className="text-4xl font-bold">{tournament.name}</h1>
+            <div className="flex items-center gap-4">
+                <h1 className="text-4xl font-bold">{tournament.name}</h1>
+                <button onClick={onEditTournament} title="Editar Torneo" className="text-gray-400 hover:text-white transition-colors">
+                    <EditIcon className="w-6 h-6"/>
+                </button>
+            </div>
             <div className="flex items-center gap-4">
                  <button onClick={onBackToDashboard} className="bg-gray-600 text-white font-bold py-2 px-6 rounded-lg hover:bg-gray-700 transition-colors">
                     Volver al Dashboard
@@ -318,7 +345,7 @@ const TournamentView: React.FC<TournamentViewProps> = ({ tournament, getTeamById
 
         {activeTab === 'groups' && (
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                {tournament.groups.map(group => <GroupComponent key={group.id} group={group} getTeamById={getTeamById} onUpdateMatch={(match) => onUpdateMatch(match, 'group')} sport={tournament.sport} dispatch={dispatch}/>)}
+                {tournament.groups.map(group => <GroupComponent key={group.id} group={group} getTeamById={getTeamById} onUpdateMatch={(match) => onUpdateMatch(match, 'group')} sport={tournament.sport} dispatch={dispatch} fullTeamsList={tournament.teams} />)}
             </div>
         )}
 
@@ -328,7 +355,7 @@ const TournamentView: React.FC<TournamentViewProps> = ({ tournament, getTeamById
                     <h2 className="text-2xl font-bold mb-4">Clasificación 1ros Puestos</h2>
                     <div className="bg-gray-800 border border-gray-700 rounded-lg p-4">
                        <table className="w-full text-sm">
-                           <thead><tr className="bg-gray-700/50"><th className="p-3">#</th><th className="p-3 text-left">Equipo</th><th className="p-3">Pts</th><th className="p-3">DG/DS</th><th className="p-3">GF/PF</th></tr></thead>
+                           <thead><tr className="bg-gray-700/50"><th className="p-3">#</th><th className="p-3 text-left">Equipo</th><th className="p-3">Pts</th><th className="p-3">DG/DS</th><th className="p-3">GF/PF</th><th className="p-3 text-green-400">TV</th></tr></thead>
                            <tbody>
                              {sortedFirsts.map((team, index) => (
                                 <tr key={team.id} className="border-b border-gray-700">
@@ -337,6 +364,7 @@ const TournamentView: React.FC<TournamentViewProps> = ({ tournament, getTeamById
                                   <td className="p-2 text-center">{team.points}</td>
                                   <td className="p-2 text-center">{tournament.sport === Sport.GENERAL ? team.goalDifference : team.setDifference}</td>
                                   <td className="p-2 text-center">{tournament.sport === Sport.GENERAL ? team.goalsFor : team.pointsFor}</td>
+                                  <td className="p-2 text-center text-green-400">{team.greenCards}</td>
                                 </tr>
                              ))}
                            </tbody>
@@ -347,7 +375,7 @@ const TournamentView: React.FC<TournamentViewProps> = ({ tournament, getTeamById
                     <h2 className="text-2xl font-bold mb-4">Clasificación 2dos Puestos (Clasifican 2)</h2>
                      <div className="bg-gray-800 border border-gray-700 rounded-lg p-4">
                        <table className="w-full text-sm">
-                          <thead><tr className="bg-gray-700/50"><th className="p-3">#</th><th className="p-3 text-left">Equipo</th><th className="p-3">Pts</th><th className="p-3">DG/DS</th><th className="p-3">GF/PF</th></tr></thead>
+                          <thead><tr className="bg-gray-700/50"><th className="p-3">#</th><th className="p-3 text-left">Equipo</th><th className="p-3">Pts</th><th className="p-3">DG/DS</th><th className="p-3">GF/PF</th><th className="p-3 text-green-400">TV</th></tr></thead>
                            <tbody>
                              {sortedSeconds.map((team, index) => (
                                 <tr key={team.id} className={`border-b border-gray-700 ${index < 2 ? 'bg-green-500/10' : ''}`}>
@@ -356,6 +384,7 @@ const TournamentView: React.FC<TournamentViewProps> = ({ tournament, getTeamById
                                   <td className="p-2 text-center">{team.points}</td>
                                   <td className="p-2 text-center">{tournament.sport === Sport.GENERAL ? team.goalDifference : team.setDifference}</td>
                                   <td className="p-2 text-center">{tournament.sport === Sport.GENERAL ? team.goalsFor : team.pointsFor}</td>
+                                  <td className="p-2 text-center text-green-400">{team.greenCards}</td>
                                 </tr>
                              ))}
                            </tbody>

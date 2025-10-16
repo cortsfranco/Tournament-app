@@ -25,14 +25,69 @@ const saveTournaments = (tournaments: TournamentState[]) => {
     }
 };
 
+const EditTournamentModal: React.FC<{
+  tournament: TournamentState;
+  onClose: () => void;
+  onSave: (details: { name: string; sport: Sport }) => void;
+}> = ({ tournament, onClose, onSave }) => {
+  const [name, setName] = useState(tournament.name);
+  const [sport, setSport] = useState(tournament.sport);
+
+  const handleSave = () => {
+    if (name.trim()) {
+      onSave({ name: name.trim(), sport });
+      onClose();
+    } else {
+      alert('El nombre del torneo no puede estar vacío.');
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black bg-opacity-70 flex items-center justify-center z-50 p-4">
+      <div className="bg-gray-800 rounded-lg p-8 w-full max-w-lg border border-gray-700">
+        <h2 className="text-2xl font-bold mb-6 text-center">Editar Torneo</h2>
+        <div className="mb-6">
+          <label htmlFor="tournamentName" className="block text-lg font-semibold text-gray-300 mb-2">Nombre del Torneo</label>
+          <input
+            id="tournamentName"
+            type="text"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            className="w-full bg-gray-700 border border-gray-600 rounded-md px-4 py-2 text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-teal-500"
+            required
+          />
+        </div>
+        <div className="mb-8">
+          <label className="block text-lg font-semibold text-gray-300 mb-4">Deporte</label>
+          <div className="flex space-x-4">
+            <button type="button" onClick={() => setSport(Sport.GENERAL)} className={`flex-1 p-4 rounded-lg font-semibold transition-all duration-200 ${sport === Sport.GENERAL ? 'bg-teal-500 text-white shadow-lg' : 'bg-gray-700 text-gray-300 hover:bg-gray-600'}`}>
+              Futsal / Baloncesto / Balonmano
+            </button>
+            <button type="button" onClick={() => setSport(Sport.VOLLEYBALL)} className={`flex-1 p-4 rounded-lg font-semibold transition-all duration-200 ${sport === Sport.VOLLEYBALL ? 'bg-teal-500 text-white shadow-lg' : 'bg-gray-700 text-gray-300 hover:bg-gray-600'}`}>
+              Voleibol
+            </button>
+          </div>
+        </div>
+        <div className="flex justify-end space-x-4 mt-8">
+          <button onClick={onClose} className="bg-gray-600 hover:bg-gray-500 text-white font-bold py-2 px-4 rounded">Cancelar</button>
+          <button onClick={handleSave} className="bg-teal-500 hover:bg-teal-600 text-white font-bold py-2 px-4 rounded">Guardar Cambios</button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+
 const ScoreModal: React.FC<{
   match: Match | null;
+  matchType: 'group' | 'playoff';
   sport: Sport;
   team1Name: string;
   team2Name: string;
   onClose: () => void;
   onSave: (scores: Omit<Match, 'id' | 'team1Id' | 'team2Id' | 'played' | 'round'>) => void;
-}> = ({ match, sport, team1Name, team2Name, onClose, onSave }) => {
+  onForceWin: (winnerId: number) => void;
+}> = ({ match, matchType, sport, team1Name, team2Name, onClose, onSave, onForceWin }) => {
     const [team1Score, setTeam1Score] = useState(match?.team1Score ?? 0);
     const [team2Score, setTeam2Score] = useState(match?.team2Score ?? 0);
     const [team1GreenCards, setTeam1GreenCards] = useState(match?.team1GreenCards ?? 0);
@@ -119,6 +174,16 @@ const ScoreModal: React.FC<{
                         </div>
                     </div>
                 </div>
+                 {matchType === 'playoff' && (
+                    <div className="mt-6 border-t border-gray-700 pt-6">
+                        <h3 className="text-xl font-semibold mb-4 text-center text-gray-300">Anulación Manual</h3>
+                        <p className="text-center text-gray-400 text-sm mb-4">Designa un ganador manualmente. Útil para descalificaciones.</p>
+                        <div className="flex justify-around gap-4">
+                            <button onClick={() => onForceWin(match.team1Id)} className="w-full bg-yellow-600 hover:bg-yellow-700 text-white font-bold py-2 px-4 rounded transition-colors">Forzar Victoria para {team1Name}</button>
+                            <button onClick={() => onForceWin(match.team2Id)} className="w-full bg-yellow-600 hover:bg-yellow-700 text-white font-bold py-2 px-4 rounded transition-colors">Forzar Victoria para {team2Name}</button>
+                        </div>
+                    </div>
+                )}
                 <div className="flex justify-end space-x-4 mt-8">
                     <button onClick={onClose} className="bg-gray-600 hover:bg-gray-500 text-white font-bold py-2 px-4 rounded">Cancelar</button>
                     <button onClick={handleSave} className="bg-teal-500 hover:bg-teal-600 text-white font-bold py-2 px-4 rounded">Guardar</button>
@@ -132,6 +197,11 @@ function App() {
   const [tournaments, setTournaments] = useState<TournamentState[]>(loadTournaments);
   const [view, setView] = useState<'dashboard' | 'setup' | 'tournament'>('dashboard');
   const [activeTournamentId, setActiveTournamentId] = useState<string | null>(null);
+  
+  const [isScoreModalOpen, setIsScoreModalOpen] = useState(false);
+  const [selectedMatch, setSelectedMatch] = useState<{ match: Match; type: 'group' | 'playoff' } | null>(null);
+  const [isEditTournamentModalOpen, setIsEditTournamentModalOpen] = useState(false);
+
 
   useEffect(() => {
     saveTournaments(tournaments);
@@ -193,16 +263,13 @@ function App() {
     return activeTournament?.teams.find(t => t.id === id);
   }, [activeTournament]);
 
-  const [modalOpen, setModalOpen] = useState(false);
-  const [selectedMatch, setSelectedMatch] = useState<{ match: Match; type: 'group' | 'playoff' } | null>(null);
-
   const handleUpdateMatch = (match: Match, matchType: 'group' | 'playoff') => {
     setSelectedMatch({ match, type: matchType });
-    setModalOpen(true);
+    setIsScoreModalOpen(true);
   };
 
   const handleCloseModal = () => {
-    setModalOpen(false);
+    setIsScoreModalOpen(false);
     setSelectedMatch(null);
   };
 
@@ -221,6 +288,29 @@ function App() {
     }
   };
 
+  const handleEditTournament = () => {
+    setIsEditTournamentModalOpen(true);
+  };
+
+  const handleSaveTournamentDetails = (details: { name: string, sport: Sport }) => {
+    if (activeTournamentId) {
+      dispatchForTournament(activeTournamentId, {
+        type: 'EDIT_TOURNAMENT_DETAILS',
+        payload: details
+      });
+    }
+  };
+
+  const handleForceWin = (winnerId: number) => {
+    if (selectedMatch && activeTournamentId) {
+      dispatchForTournament(activeTournamentId, {
+        type: 'OVERRIDE_PLAYOFF_WINNER',
+        payload: { matchId: selectedMatch.match.id, winnerId }
+      });
+      handleCloseModal();
+    }
+  };
+
   const renderContent = () => {
     switch (view) {
       case 'setup':
@@ -234,6 +324,7 @@ function App() {
                     onGeneratePlayoffs={handleGeneratePlayoffs} 
                     dispatch={(action) => dispatchForTournament(activeTournament.id, action)}
                     onBackToDashboard={handleBackToDashboard}
+                    onEditTournament={handleEditTournament}
                  />;
         }
         handleBackToDashboard(); // Fallback if active tournament not found
@@ -253,14 +344,23 @@ function App() {
   return (
     <div className="min-h-screen bg-gray-900 text-gray-200 font-sans">
       {renderContent()}
-      {modalOpen && selectedMatch && activeTournament && (
+      {isScoreModalOpen && selectedMatch && activeTournament && (
         <ScoreModal
           match={selectedMatch.match}
+          matchType={selectedMatch.type}
           sport={activeTournament.sport}
           team1Name={getTeamById(selectedMatch.match.team1Id)?.name ?? 'Equipo 1'}
           team2Name={getTeamById(selectedMatch.match.team2Id)?.name ?? 'Equipo 2'}
           onClose={handleCloseModal}
           onSave={handleSaveScore}
+          onForceWin={handleForceWin}
+        />
+      )}
+      {isEditTournamentModalOpen && activeTournament && (
+        <EditTournamentModal 
+            tournament={activeTournament}
+            onClose={() => setIsEditTournamentModalOpen(false)}
+            onSave={handleSaveTournamentDetails}
         />
       )}
     </div>
